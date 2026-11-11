@@ -164,7 +164,14 @@ pub struct SqliteStore {
 #[cfg(feature = "sqlite")]
 impl SqliteStore {
     pub async fn new(url: &str) -> Result<Self, super::DbError> {
-        let opts = SqliteConnectOptions::from_str(url)?.create_if_missing(true);
+        // WAL: reads don't wait for an upload's writes (in the default rollback
+        // journal mode every write locks out all readers, so lists stalled for
+        // the 5 s busy timeout while logs were uploading). With WAL,
+        // synchronous=NORMAL is still safe after a crash.
+        let opts = SqliteConnectOptions::from_str(url)?
+            .create_if_missing(true)
+            .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+            .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
             .connect_with(opts)
@@ -821,13 +828,16 @@ impl LogStore for SqliteStore {
 
     async fn insert_tags(&self, log_id: Uuid, tags: &[String]) -> Result<(), DbError> {
         let id_str = log_id.to_string();
+        // one transaction (one commit) for all rows of this log
+        let mut tx = self.pool.begin().await?;
         for tag in tags {
             sqlx::query("INSERT OR REPLACE INTO log_tags (log_id, tag) VALUES (?, ?)")
                 .bind(&id_str)
                 .bind(tag)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -837,6 +847,8 @@ impl LogStore for SqliteStore {
         errors: &[(String, String, Option<u64>)],
     ) -> Result<(), DbError> {
         let id_str = log_id.to_string();
+        // one transaction (one commit) for all rows of this log
+        let mut tx = self.pool.begin().await?;
         for (level, message, timestamp_us) in errors {
             sqlx::query(
                 "INSERT INTO log_errors (log_id, level, message, timestamp_us) VALUES (?, ?, ?, ?)",
@@ -845,9 +857,10 @@ impl LogStore for SqliteStore {
             .bind(level)
             .bind(message)
             .bind(timestamp_us.map(|t| t as i64))
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -857,6 +870,8 @@ impl LogStore for SqliteStore {
         stats: &[super::FieldStatRecord],
     ) -> Result<(), DbError> {
         let id_str = log_id.to_string();
+        // one transaction (one commit) for all rows of this log
+        let mut tx = self.pool.begin().await?;
         for s in stats {
             sqlx::query(
                 "INSERT OR REPLACE INTO log_field_stats (log_id, topic, field, min_val, max_val, mean_val, count) \
@@ -869,9 +884,10 @@ impl LogStore for SqliteStore {
                 .bind(s.max_val)
                 .bind(s.mean_val)
                 .bind(s.count)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -881,6 +897,8 @@ impl LogStore for SqliteStore {
         diagnostics: &[super::DiagnosticRecord],
     ) -> Result<(), DbError> {
         let id_str = log_id.to_string();
+        // one transaction (one commit) for all rows of this log
+        let mut tx = self.pool.begin().await?;
         for d in diagnostics {
             sqlx::query(
                 "INSERT INTO log_diagnostics (log_id, diagnostic_id, severity, summary, timestamp_us, end_timestamp_us, evidence) \
@@ -893,9 +911,10 @@ impl LogStore for SqliteStore {
                 .bind(d.timestamp_us)
                 .bind(d.end_timestamp_us)
                 .bind(&d.evidence)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await?;
         }
+        tx.commit().await?;
         Ok(())
     }
 
