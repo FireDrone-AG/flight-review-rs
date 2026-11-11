@@ -368,6 +368,11 @@ fn build_where_postgres(filters: &ListFilters) -> (String, Vec<String>, usize) {
         bind_values.push(format!("%{}%", v));
         param_idx += 1;
     }
+    if let Some(ref v) = filters.vehicle_name {
+        conditions.push(format!("vehicle_name = ${}", param_idx));
+        bind_values.push(v.clone());
+        param_idx += 1;
+    }
     if let Some(ref topic) = filters.has_topic {
         conditions.push(format!(
             "EXISTS (SELECT 1 FROM log_topics WHERE log_id = logs.id AND topic_name = ${})",

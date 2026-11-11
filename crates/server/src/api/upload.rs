@@ -1,4 +1,4 @@
-use axum::{extract::Multipart, extract::State, Json};
+use axum::{extract::Multipart, extract::State, http::HeaderMap, Json};
 use bytes::Bytes;
 use std::sync::Arc;
 use uuid::Uuid;
@@ -9,6 +9,7 @@ use super::ApiError;
 
 pub async fn upload(
     State(state): State<Arc<crate::AppState>>,
+    headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // 1. Extract the file and optional fields from multipart
@@ -66,6 +67,15 @@ pub async fn upload(
         }
     }
 
+    // Behind an authenticating proxy, the vehicle is who the proxy says it is.
+    if let Some(name) = state.vehicle_name_header.as_deref() {
+        if let Some(value) = headers.get(name).and_then(|v| v.to_str().ok()) {
+            if !value.is_empty() {
+                vehicle_name = Some(value.to_string());
+            }
+        }
+    }
+
     let (original_filename, data) = file_bytes.ok_or_else(|| {
         ApiError::BadRequest("missing 'file' field in multipart form".to_string())
     })?;
@@ -90,7 +100,9 @@ pub async fn upload(
     })
     .await
     .map_err(|e| ApiError::Internal(format!("spawn_blocking join error: {e}")))?
-    .map_err(|e| ApiError::Internal(format!("conversion error: {e}")))?;
+    // The file isn't a ULog the converter can read: the client's problem,
+    // and retrying won't help.
+    .map_err(|e| ApiError::BadRequest(format!("conversion error: {e}")))?;
 
     // 5. Store the raw .ulg file alongside converted data
     state

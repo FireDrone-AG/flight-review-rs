@@ -380,6 +380,10 @@ fn build_where_sqlite(filters: &ListFilters) -> (String, Vec<String>) {
         conditions.push("location_name LIKE ?".to_string());
         bind_values.push(format!("%{}%", v));
     }
+    if let Some(ref v) = filters.vehicle_name {
+        conditions.push("vehicle_name = ?".to_string());
+        bind_values.push(v.clone());
+    }
     if let Some(ref topic) = filters.has_topic {
         conditions.push(
             "EXISTS (SELECT 1 FROM log_topics WHERE log_id = logs.id AND topic_name = ?)"

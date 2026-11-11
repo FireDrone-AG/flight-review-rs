@@ -1,6 +1,8 @@
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
+use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
 use flight_review_server::{db, storage::FileStorage, AppState};
@@ -47,6 +49,19 @@ struct ServeConfig {
     /// Can also be set via the MAPBOX_ACCESS_TOKEN environment variable.
     #[arg(long, env = "MAPBOX_ACCESS_TOKEN")]
     mapbox_token: Option<String>,
+
+    /// Directory with the built frontend (`frontend/build`). When set, the
+    /// server also serves the web app; paths that are neither an API route
+    /// nor a file get `index.html`, so client-side routes work on reload.
+    #[arg(long, env = "FLIGHT_REVIEW_STATIC_DIR")]
+    static_dir: Option<PathBuf>,
+
+    /// Take each upload's vehicle name from this request header instead of
+    /// the form field (e.g. `X-Drone-Id`). Only safe behind a reverse proxy
+    /// that authenticates uploaders, sets the header and strips it from
+    /// incoming requests.
+    #[arg(long, env = "FLIGHT_REVIEW_VEHICLE_NAME_HEADER")]
+    vehicle_name_header: Option<String>,
 }
 
 #[derive(Args)]
@@ -100,6 +115,9 @@ async fn run_server(config: ServeConfig) {
     if config.mapbox_token.is_some() {
         tracing::info!("mapbox geocoding: enabled");
     }
+    if let Some(ref h) = config.vehicle_name_header {
+        tracing::info!("vehicle name from header: {}", h);
+    }
 
     let db = db::create_db(&config.db)
         .await
@@ -111,10 +129,16 @@ async fn run_server(config: ServeConfig) {
         storage,
         v1_ulg_prefix: config.v1_ulg_prefix,
         mapbox_token: config.mapbox_token,
+        vehicle_name_header: config.vehicle_name_header,
         http_client: reqwest::Client::new(),
     });
 
-    let app = flight_review_server::build_router(state);
+    let mut app = flight_review_server::build_router(state);
+    if let Some(dir) = config.static_dir {
+        tracing::info!("frontend: {}", dir.display());
+        let index = ServeFile::new(dir.join("index.html"));
+        app = app.fallback_service(ServeDir::new(dir).fallback(index));
+    }
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr)

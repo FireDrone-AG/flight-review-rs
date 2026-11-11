@@ -21,6 +21,11 @@ pub struct AppState {
     pub v1_ulg_prefix: Option<String>,
     /// Mapbox access token for reverse geocoding at upload time.
     pub mapbox_token: Option<String>,
+    /// Request header whose value becomes the log's vehicle name on upload,
+    /// overriding the form field. Only for deployments where a reverse proxy
+    /// sets this header after authenticating the uploader (and strips it from
+    /// incoming requests). `None`: the form field is used as sent.
+    pub vehicle_name_header: Option<String>,
     /// Shared HTTP client for outbound requests (geocoding, etc.).
     pub http_client: reqwest::Client,
 }

@@ -237,6 +237,8 @@ pub struct ListFilters {
     pub has_gps: Option<bool>,
     /// Filter by location name (substring match)
     pub location_name: Option<String>,
+    /// Filter by vehicle name (exact match)
+    pub vehicle_name: Option<String>,
     /// Sort column and direction, e.g. "created_at:desc", "flight_duration_s:asc"
     pub sort: Option<String>,
 

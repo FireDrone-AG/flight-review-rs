@@ -43,6 +43,12 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 
 /// Start the server in the background and return the base URL.
 async fn start_server() -> (String, tokio::task::JoinHandle<()>) {
+    start_server_with(None).await
+}
+
+async fn start_server_with(
+    vehicle_name_header: Option<&str>,
+) -> (String, tokio::task::JoinHandle<()>) {
     let port = free_port();
     let base_url = format!("http://127.0.0.1:{}", port);
 
@@ -67,6 +73,7 @@ async fn start_server() -> (String, tokio::task::JoinHandle<()>) {
         storage,
         v1_ulg_prefix: None,
         mapbox_token: None,
+        vehicle_name_header: vehicle_name_header.map(String::from),
         http_client: reqwest::Client::new(),
     });
 
@@ -296,4 +303,53 @@ async fn test_full_lifecycle() {
         .unwrap();
     let list: Value = resp.json().await.unwrap();
     assert_eq!(list["total"], 0);
+}
+
+/// Behind an authenticating proxy, the vehicle name comes from the proxy's
+/// header, not from the form, and logs can be listed per vehicle.
+#[tokio::test]
+async fn test_vehicle_name_header_and_filter() {
+    let (base_url, _handle) = start_server_with(Some("X-Drone-Id")).await;
+    let client = reqwest::Client::new();
+    let bytes = std::fs::read(fixture_path("sample.ulg")).unwrap();
+
+    let upload = |header: Option<&'static str>, form_name: &'static str| {
+        let form = reqwest::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(bytes.clone()).file_name("sample.ulg"),
+            )
+            .text("vehicle_name", form_name);
+        let mut req = client
+            .post(format!("{}/api/upload", base_url))
+            .multipart(form);
+        if let Some(h) = header {
+            req = req.header("X-Drone-Id", h);
+        }
+        req.send()
+    };
+
+    // The header wins over what the form claims.
+    let resp = upload(Some("fd-0001"), "fd-0002").await.unwrap();
+    assert_eq!(resp.status(), 200);
+    // Without the header, the form field is used.
+    let resp = upload(None, "fd-0002").await.unwrap();
+    assert_eq!(resp.status(), 200);
+
+    let list = |name: &str| {
+        client
+            .get(format!(
+                "{}/api/logs?include_private=true&vehicle_name={}",
+                base_url, name
+            ))
+            .send()
+    };
+    let body: Value = list("fd-0001").await.unwrap().json().await.unwrap();
+    assert_eq!(body["total"], 1, "{body:?}");
+    assert_eq!(body["logs"][0]["vehicle_name"], "fd-0001");
+    let body: Value = list("fd-0002").await.unwrap().json().await.unwrap();
+    assert_eq!(body["total"], 1, "{body:?}");
+    // Exact match: a prefix finds nothing.
+    let body: Value = list("fd-000").await.unwrap().json().await.unwrap();
+    assert_eq!(body["total"], 0, "{body:?}");
 }
