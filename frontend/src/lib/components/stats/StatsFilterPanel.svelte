@@ -1,5 +1,6 @@
 <script lang="ts">
 	import type { StatsFilters } from '$lib/types';
+	import { vehicleNames, vehicleLabel } from '$lib/stores/vehicleNames';
 
 	let {
 		period,
@@ -86,7 +87,7 @@
 			>
 				<option value="">All drones</option>
 				{#each droneOptions as drone}
-					<option value={drone}>{drone}</option>
+					<option value={drone}>{vehicleLabel($vehicleNames, drone)}</option>
 				{/each}
 			</select>
 		{/if}

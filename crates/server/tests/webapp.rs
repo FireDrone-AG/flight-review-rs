@@ -1,14 +1,18 @@
-//! FireDrone: the web app router (`webapp::router`): nav links, the static
-//! files with their fallback to index.html, and the cache headers.
+//! FireDrone: the web app router (`webapp::router`): nav links, vehicle
+//! names, the static files with their fallback to index.html, and the cache
+//! headers.
 
 use flight_review_server::webapp::{self, NavLink};
 
-async fn start(static_dir: &std::path::Path, links: Vec<NavLink>) -> String {
+async fn serve(app: axum::Router) -> String {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    let app = webapp::router(Some(static_dir), links);
     tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
     base
+}
+
+async fn start(static_dir: &std::path::Path, links: Vec<NavLink>) -> String {
+    serve(webapp::router(Some(static_dir), links, None)).await
 }
 
 fn cache_control(res: &reqwest::Response) -> &str {
@@ -74,4 +78,39 @@ async fn test_no_nav_links() {
         .await
         .unwrap();
     assert_eq!(body, serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn test_vehicle_names() {
+    // stands in for FireDrone Fleet's /api/drone-names
+    let fleet = serve(axum::Router::new().route(
+        "/api/drone-names",
+        axum::routing::get(|| async {
+            axum::Json(serde_json::json!({"fd-0003": "Dev Drone 1", "fd-0004": 7}))
+        }),
+    ))
+    .await;
+    let names = |app| async {
+        let base = serve(app).await;
+        reqwest::get(format!("{base}/api/vehicle-names"))
+            .await
+            .unwrap()
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()
+    };
+
+    let app = webapp::router(None, vec![], Some(format!("{fleet}/api/drone-names")));
+    // text names only
+    assert_eq!(
+        names(app).await,
+        serde_json::json!({"fd-0003": "Dev Drone 1"})
+    );
+    // not configured, or fleet not answering: no names, the page shows IDs
+    assert_eq!(
+        names(webapp::router(None, vec![], None)).await,
+        serde_json::json!({})
+    );
+    let gone = webapp::router(None, vec![], Some(format!("{fleet}/nothing-here")));
+    assert_eq!(names(gone).await, serde_json::json!({}));
 }

@@ -4,6 +4,7 @@
 	import { formatDuration, formatFileSize, formatRelativeTime } from '$lib/utils/formatters';
 	import { getHardwareName } from '$lib/utils/hardwareNames';
 	import FlightThumbnail from './FlightThumbnail.svelte';
+	import { vehicleNames, vehicleLabel } from '$lib/stores/vehicleNames';
 
 	let { logs, sortField, sortDir, onSort }: {
 		logs: LogRecord[];
@@ -100,7 +101,7 @@
 								>
 									{#if col.key === 'vehicle_name'}
 										{#if log.vehicle_name}
-											<span class="font-medium text-gray-900">{log.vehicle_name}</span>
+											<span class="font-medium text-gray-900" title={log.vehicle_name}>{vehicleLabel($vehicleNames, log.vehicle_name)}</span>
 										{:else}
 											<span class="text-gray-300">{'\u2014'}</span>
 										{/if}

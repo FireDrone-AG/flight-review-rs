@@ -3,6 +3,7 @@
 <script lang="ts">
 	import type { StatsDataPoint } from '$lib/types';
 	import { formatDuration } from '$lib/utils/formatters';
+	import { vehicleNames, vehicleLabel } from '$lib/stores/vehicleNames';
 
 	let {
 		data,
@@ -53,7 +54,7 @@
 									title={item.group === selected ? 'Show all drones' : `Show only ${item.group}`}
 									onclick={() => onDroneClick(item.group === selected ? undefined : item.group)}
 								>
-									{item.group}
+									{vehicleLabel($vehicleNames, item.group)}
 								</button>
 							</td>
 							<td class="whitespace-nowrap px-4 py-3 text-sm text-gray-700 text-right">{item.count.toLocaleString()}</td>

@@ -71,6 +71,12 @@ struct ServeConfig {
         value_delimiter = ','
     )]
     nav_links: Vec<webapp::NavLink>,
+
+    /// URL of a JSON object {vehicle name: display name}, e.g. FireDrone
+    /// Fleet's `http://fleet:8000/api/drone-names`. The web app then shows
+    /// "Dev Drone 1" instead of fd-0003. Fetched at most once a minute.
+    #[arg(long, env = "FLIGHT_REVIEW_VEHICLE_NAMES_URL")]
+    vehicle_names_url: Option<String>,
 }
 
 #[derive(Args)]
@@ -154,9 +160,13 @@ async fn run_server(config: ServeConfig) {
     for link in &config.nav_links {
         tracing::info!("nav link: {} -> {}", link.name, link.url);
     }
+    if let Some(ref url) = config.vehicle_names_url {
+        tracing::info!("vehicle names: {url}");
+    }
     let app = flight_review_server::build_router(state).merge(webapp::router(
         config.static_dir.as_deref(),
         config.nav_links,
+        config.vehicle_names_url,
     ));
 
     let addr = format!("{}:{}", config.host, config.port);

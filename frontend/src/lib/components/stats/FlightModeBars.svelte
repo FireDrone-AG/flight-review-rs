@@ -5,6 +5,7 @@
 	import type { FlightModeStat } from '$lib/types';
 	import { formatDuration } from '$lib/utils/formatters';
 	import { getModeColor, getModeName } from '$lib/utils/modeColors';
+	import { vehicleNames, vehicleLabel } from '$lib/stores/vehicleNames';
 
 	let {
 		data,
@@ -30,7 +31,7 @@
 
 <div class="rounded-lg bg-white p-6 ring-1 ring-gray-200">
 	<h3 class="text-sm font-medium text-gray-500">
-		Flight modes{#if drone}<span class="text-gray-400">{` · ${drone}`}</span>{/if}
+		Flight modes{#if drone}<span class="text-gray-400">{` · ${vehicleLabel($vehicleNames, drone)}`}</span>{/if}
 	</h3>
 	<p class="mt-1 text-xs text-gray-400">Time in each mode, whole logs</p>
 	{#if loading}

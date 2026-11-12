@@ -1,8 +1,9 @@
-//! FireDrone: serving the built web app (`--static-dir`) and the links to
-//! other tools that its navigation shows (`--nav-link`).
+//! FireDrone: serving the built web app (`--static-dir`), the links to
+//! other tools that its navigation shows (`--nav-link`), and display names
+//! for vehicle names (`--vehicle-names-url`).
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     http::{header, HeaderValue},
     middleware::{self, Next},
     response::Response,
@@ -10,7 +11,11 @@ use axum::{
     Json, Router,
 };
 use serde::Serialize;
+use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::Mutex;
 use tower_http::services::{ServeDir, ServeFile};
 
 /// A link to another tool, shown in the web app's navigation.
@@ -45,13 +50,21 @@ impl std::str::FromStr for NavLink {
     }
 }
 
-/// `GET /api/nav-links`, plus the web app from `static_dir` for every other
-/// path that no API route takes. Merge it into [`crate::build_router`]'s router.
-pub fn router(static_dir: Option<&Path>, nav_links: Vec<NavLink>) -> Router {
-    let mut app = Router::new().route(
-        "/api/nav-links",
-        get(move || std::future::ready(Json(nav_links.clone()))),
-    );
+/// `GET /api/nav-links`, `GET /api/vehicle-names`, plus the web app from
+/// `static_dir` for every other path that no API route takes. Merge it into
+/// [`crate::build_router`]'s router.
+pub fn router(
+    static_dir: Option<&Path>,
+    nav_links: Vec<NavLink>,
+    vehicle_names_url: Option<String>,
+) -> Router {
+    let names = Arc::new(VehicleNames::new(vehicle_names_url));
+    let mut app = Router::new()
+        .route(
+            "/api/nav-links",
+            get(move || std::future::ready(Json(nav_links.clone()))),
+        )
+        .route("/api/vehicle-names", get(vehicle_names).with_state(names));
     if let Some(dir) = static_dir {
         // Hashed build output: a missing file is a 404, not index.html, so
         // that no page gets cached under an asset's name.
@@ -64,6 +77,78 @@ pub fn router(static_dir: Option<&Path>, nav_links: Vec<NavLink>) -> Router {
             .fallback_service(ServeDir::new(dir).fallback(index));
     }
     app.layer(middleware::from_fn(cache_control))
+}
+
+/// How long fetched display names are used before asking again.
+const NAMES_TTL: Duration = Duration::from_secs(60);
+
+/// Display names for vehicle names, e.g. {"fd-0003": "Dev Drone 1"}, read from
+/// a URL that answers with such a JSON object (FireDrone Fleet's
+/// /api/drone-names). Kept for [`NAMES_TTL`]; if the URL doesn't answer, the
+/// last names (or none) are used until the next try.
+type Names = Arc<HashMap<String, String>>;
+
+struct VehicleNames {
+    url: Option<String>,
+    client: reqwest::Client,
+    /// When the names were fetched, and the names
+    cache: Mutex<Option<(Instant, Names)>>,
+}
+
+impl VehicleNames {
+    fn new(url: Option<String>) -> Self {
+        VehicleNames {
+            url,
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(3))
+                .build()
+                .expect("HTTP client"),
+            cache: Mutex::new(None),
+        }
+    }
+
+    async fn get(&self) -> Names {
+        let Some(url) = &self.url else {
+            return Arc::default();
+        };
+        let mut cache = self.cache.lock().await;
+        if let Some((at, names)) = cache.as_ref() {
+            if at.elapsed() < NAMES_TTL {
+                return names.clone();
+            }
+        }
+        let names = match self.fetch(url).await {
+            Ok(names) => Arc::new(names),
+            Err(e) => {
+                tracing::warn!("vehicle names from {url}: {e}");
+                cache.as_ref().map(|(_, n)| n.clone()).unwrap_or_default()
+            }
+        };
+        *cache = Some((Instant::now(), names.clone()));
+        names
+    }
+
+    async fn fetch(&self, url: &str) -> Result<HashMap<String, String>, reqwest::Error> {
+        let body: HashMap<String, serde_json::Value> = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        // only text names
+        Ok(body
+            .into_iter()
+            .filter_map(|(id, name)| Some((id, name.as_str()?.to_string())))
+            .collect())
+    }
+}
+
+/// `GET /api/vehicle-names`: {vehicle name: display name}, `{}` without
+/// `--vehicle-names-url`.
+async fn vehicle_names(State(names): State<Arc<VehicleNames>>) -> Json<HashMap<String, String>> {
+    Json((*names.get().await).clone())
 }
 
 /// Files under `/_app/immutable/` have the content hash in their name and can
