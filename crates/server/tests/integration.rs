@@ -49,6 +49,18 @@ async fn start_server() -> (String, tokio::task::JoinHandle<()>) {
 async fn start_server_with(
     vehicle_name_header: Option<&str>,
 ) -> (String, tokio::task::JoinHandle<()>) {
+    let (base_url, handle, _) = start_server_with_state(vehicle_name_header).await;
+    (base_url, handle)
+}
+
+/// Like `start_server_with`, plus the server's state (database, storage).
+async fn start_server_with_state(
+    vehicle_name_header: Option<&str>,
+) -> (
+    String,
+    tokio::task::JoinHandle<()>,
+    Arc<flight_review_server::AppState>,
+) {
     let port = free_port();
     let base_url = format!("http://127.0.0.1:{}", port);
 
@@ -79,7 +91,7 @@ async fn start_server_with(
 
     // Use the same router the binary serves, so the test never drifts from
     // the real route table.
-    let app = flight_review_server::build_router(state);
+    let app = flight_review_server::build_router(state.clone());
 
     let listener = tokio::net::TcpListener::bind(format!("127.0.0.1:{}", port))
         .await
@@ -100,7 +112,7 @@ async fn start_server_with(
     // Keep tmp_dir alive by leaking it (cleaned up on process exit)
     std::mem::forget(tmp_dir);
 
-    (base_url, handle)
+    (base_url, handle, state)
 }
 
 #[tokio::test]
@@ -352,4 +364,97 @@ async fn test_vehicle_name_header_and_filter() {
     // Exact match: a prefix finds nothing.
     let body: Value = list("fd-000").await.unwrap().json().await.unwrap();
     assert_eq!(body["total"], 0, "{body:?}");
+}
+
+/// FireDrone: stats per drone (group_by=vehicle_name, vehicle_name filter) and
+/// time per flight mode, filled at upload and by the startup backfill.
+#[tokio::test]
+async fn test_stats_per_drone_and_flight_modes() {
+    let (base_url, _handle, state) = start_server_with_state(Some("X-Drone-Id")).await;
+    let client = reqwest::Client::new();
+    let bytes = std::fs::read(fixture_path("sample.ulg")).unwrap();
+
+    let mut ids = Vec::new();
+    for drone in ["fd-0001", "fd-0001", "fd-0002"] {
+        let form = reqwest::multipart::Form::new()
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(bytes.clone()).file_name("sample.ulg"),
+            )
+            .text("is_public", "true");
+        let resp = client
+            .post(format!("{}/api/upload", base_url))
+            .header("X-Drone-Id", drone)
+            .multipart(form)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 200);
+        let body: Value = resp.json().await.unwrap();
+        ids.push(body["id"].as_str().unwrap().parse::<uuid::Uuid>().unwrap());
+    }
+    let get = |path: String| {
+        let client = client.clone();
+        let url = format!("{}{}", base_url, path);
+        async move {
+            client
+                .get(url)
+                .send()
+                .await
+                .unwrap()
+                .json::<Value>()
+                .await
+                .unwrap()
+        }
+    };
+
+    let drones = get("/api/stats?group_by=vehicle_name&period=all".into()).await;
+    let groups: Vec<(String, i64)> = drones["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|g| {
+            (
+                g["group"].as_str().unwrap().into(),
+                g["count"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(groups, vec![("fd-0001".into(), 2), ("fd-0002".into(), 1)]);
+    let one = get("/api/stats?group_by=ver_hw&period=all&vehicle_name=fd-0002".into()).await;
+    assert_eq!(one["data"][0]["count"], 1, "{one:?}");
+
+    let modes = |drone: &str| {
+        get(format!(
+            "/api/stats/flight-modes?period=all&vehicle_name={drone}"
+        ))
+    };
+    let single = modes("fd-0002").await;
+    let single = single["data"].as_array().unwrap().clone();
+    assert!(!single.is_empty(), "sample.ulg has flight modes");
+    assert!(single
+        .iter()
+        .all(|m| m["logs"] == 1 && m["total_s"].as_f64().unwrap() > 0.0));
+    let double = modes("fd-0001").await;
+    let double = double["data"].as_array().unwrap().clone();
+    assert_eq!(double.len(), single.len());
+    for (d, s) in double.iter().zip(&single) {
+        assert_eq!(d["mode"], s["mode"]);
+        assert_eq!(d["logs"], 2);
+        let (d, s) = (
+            d["total_s"].as_f64().unwrap(),
+            s["total_s"].as_f64().unwrap(),
+        );
+        assert!((d - 2.0 * s).abs() < 1e-6, "{d} vs 2 x {s}");
+    }
+
+    // Logs from before log_flight_modes: the backfill reads metadata.json.
+    state.db.insert_flight_modes(ids[2], &[]).await.unwrap();
+    assert_eq!(modes("fd-0002").await["data"], serde_json::json!([]));
+    assert_eq!(
+        state.db.logs_without_flight_modes().await.unwrap(),
+        vec![ids[2]]
+    );
+    flight_review_server::flight_modes::backfill(state.db.clone(), state.storage.clone()).await;
+    assert_eq!(modes("fd-0002").await["data"], Value::Array(single));
 }

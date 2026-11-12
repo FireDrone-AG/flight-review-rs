@@ -1,6 +1,7 @@
 pub mod api;
 pub mod db;
 pub mod extract;
+pub mod flight_modes;
 pub mod geocode;
 pub mod storage;
 pub mod webapp;
@@ -44,6 +45,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/api/logs", get(api::logs::list_logs))
         .route("/api/logs/facets", get(api::logs::list_facets))
         .route("/api/stats", get(api::stats::get_stats))
+        // FireDrone
+        .route("/api/stats/flight-modes", get(flight_modes::get_stats))
         .route(
             "/api/logs/{id}",
             get(api::logs::get_log).delete(api::logs::delete_log),

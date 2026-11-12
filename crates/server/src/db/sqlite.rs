@@ -151,6 +151,42 @@ const ALTER_COLUMNS: &[&str] = &[
     "ALTER TABLE logs ADD COLUMN diagnostic_flags TEXT",
 ];
 
+/// FireDrone: time per flight mode per log, for the stats page.
+#[cfg(feature = "sqlite")]
+const CREATE_FLIGHT_MODES: &str = r#"
+CREATE TABLE IF NOT EXISTS log_flight_modes (
+    log_id TEXT NOT NULL,
+    mode TEXT NOT NULL,
+    duration_s REAL NOT NULL,
+    PRIMARY KEY (log_id, mode),
+    FOREIGN KEY (log_id) REFERENCES logs(id) ON DELETE CASCADE
+);
+"#;
+
+/// WHERE conditions (and their values, in order) shared by the stats queries.
+#[cfg(feature = "sqlite")]
+fn stats_conditions(params: &StatsParams) -> (Vec<String>, Vec<String>) {
+    let mut conditions = vec!["is_public = 1".to_string()];
+    let mut bind_values = Vec::new();
+    if let Some(days) = period_to_days(params.period.as_deref()) {
+        conditions.push(format!("created_at >= datetime('now', '-{} days')", days));
+    }
+    for (col, value) in [
+        ("vehicle_type", &params.vehicle_type),
+        ("ver_hw", &params.ver_hw),
+        ("ver_sw_release_str", &params.ver_sw_release_str),
+        ("source", &params.source),
+        ("vibration_status", &params.vibration_status),
+        ("vehicle_name", &params.vehicle_name),
+    ] {
+        if let Some(v) = value {
+            conditions.push(format!("{col} = ?"));
+            bind_values.push(v.clone());
+        }
+    }
+    (conditions, bind_values)
+}
+
 #[cfg(feature = "sqlite")]
 pub struct SqliteStore {
     pool: SqlitePool,
@@ -186,6 +222,7 @@ impl SqliteStore {
 
         // Create junction tables for parameters, topics, tags, errors.
         sqlx::query(CREATE_JUNCTION_TABLES).execute(&pool).await?;
+        sqlx::query(CREATE_FLIGHT_MODES).execute(&pool).await?;
 
         // Migrate: add new columns to existing tables (idempotent).
         for col_sql in ALTER_COLUMNS {
@@ -722,37 +759,7 @@ impl LogStore for SqliteStore {
 
     async fn stats(&self, params: &StatsParams) -> Result<Vec<StatRow>, DbError> {
         let group_col = &params.group_by; // Already validated by handler
-
-        // Build WHERE clause
-        let mut conditions = vec!["is_public = 1".to_string()];
-        let mut bind_values: Vec<String> = Vec::new();
-
-        // Period filter
-        if let Some(days) = period_to_days(params.period.as_deref()) {
-            conditions.push(format!("created_at >= datetime('now', '-{} days')", days));
-        }
-
-        // Optional filters
-        if let Some(ref v) = params.vehicle_type {
-            conditions.push("vehicle_type = ?".to_string());
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.ver_hw {
-            conditions.push("ver_hw = ?".to_string());
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.ver_sw_release_str {
-            conditions.push("ver_sw_release_str = ?".to_string());
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.source {
-            conditions.push("source = ?".to_string());
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.vibration_status {
-            conditions.push("vibration_status = ?".to_string());
-            bind_values.push(v.clone());
-        }
+        let (conditions, bind_values) = stats_conditions(params);
 
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
         let limit = params.limit.unwrap_or(50);
@@ -946,6 +953,68 @@ impl LogStore for SqliteStore {
             .await?;
         Ok(())
     }
+
+    async fn insert_flight_modes(
+        &self,
+        log_id: Uuid,
+        modes: &[(String, f64)],
+    ) -> Result<(), DbError> {
+        let id_str = log_id.to_string();
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM log_flight_modes WHERE log_id = ?")
+            .bind(&id_str)
+            .execute(&mut *tx)
+            .await?;
+        for (mode, duration_s) in modes {
+            sqlx::query("INSERT INTO log_flight_modes (log_id, mode, duration_s) VALUES (?, ?, ?)")
+                .bind(&id_str)
+                .bind(mode)
+                .bind(duration_s)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn flight_mode_stats(
+        &self,
+        params: &StatsParams,
+    ) -> Result<Vec<super::FlightModeStat>, DbError> {
+        let (conditions, bind_values) = stats_conditions(params);
+        let sql = format!(
+            "SELECT m.mode AS mode, SUM(m.duration_s) AS total_s, COUNT(*) AS logs \
+             FROM log_flight_modes m JOIN logs ON logs.id = m.log_id \
+             WHERE {} GROUP BY m.mode ORDER BY total_s DESC",
+            conditions.join(" AND ")
+        );
+        let mut query = sqlx::query(&sql);
+        for v in &bind_values {
+            query = query.bind(v);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows
+            .iter()
+            .map(|row| super::FlightModeStat {
+                mode: row.try_get("mode").unwrap_or_default(),
+                total_s: row.try_get("total_s").unwrap_or(0.0),
+                logs: row.try_get("logs").unwrap_or(0),
+            })
+            .collect())
+    }
+
+    async fn logs_without_flight_modes(&self) -> Result<Vec<Uuid>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id FROM logs WHERE NOT EXISTS \
+             (SELECT 1 FROM log_flight_modes m WHERE m.log_id = logs.id)",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| row.try_get::<String, _>("id").ok()?.parse().ok())
+            .collect())
+    }
 }
 
 #[cfg(not(feature = "sqlite"))]
@@ -1058,6 +1127,31 @@ impl super::LogStore for SqliteStore {
     }
 
     async fn delete_junction_data(&self, _log_id: uuid::Uuid) -> Result<(), super::DbError> {
+        Err(super::DbError::Sqlx(sqlx::Error::Configuration(
+            "sqlite feature is not enabled".into(),
+        )))
+    }
+
+    async fn insert_flight_modes(
+        &self,
+        _log_id: uuid::Uuid,
+        _modes: &[(String, f64)],
+    ) -> Result<(), super::DbError> {
+        Err(super::DbError::Sqlx(sqlx::Error::Configuration(
+            "sqlite feature is not enabled".into(),
+        )))
+    }
+
+    async fn flight_mode_stats(
+        &self,
+        _params: &super::StatsParams,
+    ) -> Result<Vec<super::FlightModeStat>, super::DbError> {
+        Err(super::DbError::Sqlx(sqlx::Error::Configuration(
+            "sqlite feature is not enabled".into(),
+        )))
+    }
+
+    async fn logs_without_flight_modes(&self) -> Result<Vec<uuid::Uuid>, super::DbError> {
         Err(super::DbError::Sqlx(sqlx::Error::Configuration(
             "sqlite feature is not enabled".into(),
         )))

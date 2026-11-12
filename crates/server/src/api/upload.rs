@@ -212,6 +212,9 @@ pub async fn upload(
             })
             .collect();
         state.db.insert_field_stats(log_id, &field_stats).await?;
+        // FireDrone: time per flight mode, for the stats page
+        let modes = crate::flight_modes::from_analysis(&analysis.flight_modes);
+        state.db.insert_flight_modes(log_id, &modes).await?;
 
         // Insert diagnostics
         if !analysis.diagnostics.is_empty() {

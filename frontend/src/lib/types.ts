@@ -198,12 +198,25 @@ export interface StatsFilters {
   vehicleType?: string;
   verHw?: string;
   source?: string;
+  vehicleName?: string; // FireDrone: one drone
 }
 
 export interface StatsResponse {
   group_by: string;
   period: string;
   data: StatsDataPoint[];
+}
+
+// FireDrone: GET /api/stats/flight-modes
+export interface FlightModeStat {
+  mode: string;
+  total_s: number;
+  logs: number;
+}
+
+export interface FlightModeStatsResponse {
+  period: string;
+  data: FlightModeStat[];
 }
 
 export interface StatsDataPoint {

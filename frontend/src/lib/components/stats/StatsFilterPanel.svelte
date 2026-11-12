@@ -4,11 +4,14 @@
 	let {
 		period,
 		filters,
+		drones = [],
 		onPeriodChange,
 		onFiltersChange,
 	}: {
 		period: string;
 		filters: StatsFilters;
+		/** FireDrone: drones to pick from */
+		drones?: string[];
 		onPeriodChange: (period: string) => void;
 		onFiltersChange: (filters: StatsFilters) => void;
 	} = $props();
@@ -24,12 +27,19 @@
 	let vehicleType = $state('');
 	let verHw = $state('');
 	let source = $state('');
+	let vehicleName = $state('');
+
+	// the picked drone stays in the list even without flights in this period
+	const droneOptions = $derived(
+		filters.vehicleName && !drones.includes(filters.vehicleName) ? [filters.vehicleName, ...drones] : drones
+	);
 
 	function applyFilters() {
 		onFiltersChange({
 			vehicleType: vehicleType || undefined,
 			verHw: verHw || undefined,
 			source: source || undefined,
+			vehicleName: vehicleName || undefined,
 		});
 	}
 
@@ -37,6 +47,7 @@
 		vehicleType = '';
 		verHw = '';
 		source = '';
+		vehicleName = '';
 		onPeriodChange('all');
 		onFiltersChange({});
 	}
@@ -45,6 +56,7 @@
 		vehicleType = filters.vehicleType ?? '';
 		verHw = filters.verHw ?? '';
 		source = filters.source ?? '';
+		vehicleName = filters.vehicleName ?? '';
 	});
 </script>
 
@@ -66,6 +78,19 @@
 
 	<!-- Filter dropdowns -->
 	<div class="flex flex-wrap items-center gap-2">
+		{#if droneOptions.length > 0}
+			<select
+				bind:value={vehicleName}
+				onchange={applyFilters}
+				class="rounded-md bg-white px-3 py-1.5 text-sm text-gray-900 ring-1 ring-gray-300 focus:ring-2 focus:ring-indigo-500 outline-none"
+			>
+				<option value="">All drones</option>
+				{#each droneOptions as drone}
+					<option value={drone}>{drone}</option>
+				{/each}
+			</select>
+		{/if}
+
 		<select
 			bind:value={vehicleType}
 			onchange={applyFilters}
@@ -96,7 +121,7 @@
 	</div>
 
 	<!-- Clear all -->
-	{#if period !== 'all' || filters.vehicleType || filters.verHw || filters.source}
+	{#if period !== 'all' || filters.vehicleType || filters.verHw || filters.source || filters.vehicleName}
 		<button
 			type="button"
 			onclick={clearAll}

@@ -1,14 +1,16 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
-	import { getStats } from '$lib/api';
-	import type { StatsFilters, StatsDataPoint } from '$lib/types';
+	import { getStats, getFlightModeStats } from '$lib/api';
+	import type { StatsFilters, StatsDataPoint, FlightModeStat } from '$lib/types';
 	import StatsFilterPanel from '$lib/components/stats/StatsFilterPanel.svelte';
 	import KpiCards from '$lib/components/stats/KpiCards.svelte';
 	import HardwareBars from '$lib/components/stats/HardwareBars.svelte';
 	import VehicleTypeDonut from '$lib/components/stats/VehicleTypeDonut.svelte';
 	import DurationHistogram from '$lib/components/stats/DurationHistogram.svelte';
 	import AirframesTable from '$lib/components/stats/AirframesTable.svelte';
+	import DronesTable from '$lib/components/stats/DronesTable.svelte';
+	import FlightModeBars from '$lib/components/stats/FlightModeBars.svelte';
 
 	// URL-driven state
 	let period = $derived(page.url.searchParams.get('period') ?? 'all');
@@ -16,6 +18,7 @@
 		vehicleType: page.url.searchParams.get('vehicle_type') || undefined,
 		verHw: page.url.searchParams.get('ver_hw') || undefined,
 		source: page.url.searchParams.get('source') || undefined,
+		vehicleName: page.url.searchParams.get('vehicle_name') || undefined,
 	}));
 
 	// Data state
@@ -23,10 +26,18 @@
 	let vehicleData = $state<StatsDataPoint[]>([]);
 	let durationData = $state<StatsDataPoint[]>([]);
 	let airframeData = $state<StatsDataPoint[]>([]);
+	// FireDrone: per drone, and time per flight mode
+	let droneData = $state<StatsDataPoint[]>([]);
+	let modeData = $state<FlightModeStat[]>([]);
+	let loadingDrones = $state(true);
+	let loadingModes = $state(true);
 
 	let totalLogs = $state(0);
 	let flightHours = $state(0);
-	let uniqueVehicles = $state(0);
+	// FireDrone: drones (vehicle names); hardware types where logs have none
+	let uniqueVehicles = $derived(
+		droneData.length > 0 ? (filters.vehicleName ? 1 : droneData.length) : hwData.length
+	);
 	let todayUploads = $state(0);
 
 	let loadingHw = $state(true);
@@ -58,6 +69,7 @@
 			vehicle_type: newFilters.vehicleType,
 			ver_hw: newFilters.verHw,
 			source: newFilters.source,
+			vehicle_name: newFilters.vehicleName,
 		});
 	}
 
@@ -69,13 +81,18 @@
 		updateUrl({ vehicle_type: airframe });
 	}
 
+	function handleDroneClick(drone: string | undefined) {
+		updateUrl({ vehicle_name: drone });
+	}
+
 	function buildParams(groupBy: string) {
 		return {
 			group_by: groupBy,
-			period: period === 'all' ? undefined : period,
+			period, // "all" too: without it the server uses 30 days
 			vehicle_type: filters.vehicleType,
 			ver_hw: filters.verHw,
 			source: filters.source,
+			vehicle_name: filters.vehicleName,
 		};
 	}
 
@@ -89,6 +106,31 @@
 		loadingVehicle = true;
 		loadingDuration = true;
 		loadingAirframe = true;
+		loadingDrones = true;
+		loadingModes = true;
+
+		// FireDrone: all drones (the drone filter picks a row, not the rows)
+		getStats({ ...buildParams('vehicle_name'), vehicle_name: undefined, limit: 200 })
+			.then((res) => {
+				droneData = res.data;
+				loadingDrones = false;
+			})
+			.catch((err: Error) => {
+				error = err.message || 'Failed to load drone stats';
+				loadingDrones = false;
+			});
+
+		// FireDrone: time per flight mode
+		const { group_by: _g, ...modeParams } = buildParams('');
+		getFlightModeStats(modeParams)
+			.then((res) => {
+				modeData = res.data;
+				loadingModes = false;
+			})
+			.catch((err: Error) => {
+				error = err.message || 'Failed to load flight mode stats';
+				loadingModes = false;
+			});
 
 		// Hardware stats
 		getStats({ ...buildParams('ver_hw'), limit: 15 })
@@ -97,7 +139,6 @@
 				// Compute KPIs from hardware data (total across all groups)
 				totalLogs = res.data.reduce((s, d) => s + d.count, 0);
 				flightHours = res.data.reduce((s, d) => s + (d.total_flight_hours ?? 0), 0);
-				uniqueVehicles = res.data.length;
 				loadingHw = false;
 			})
 			.catch((err: Error) => {
@@ -159,6 +200,7 @@
 		<StatsFilterPanel
 			{period}
 			{filters}
+			drones={droneData.map((d) => d.group)}
 			onPeriodChange={handlePeriodChange}
 			onFiltersChange={handleFiltersChange}
 		/>
@@ -189,6 +231,12 @@
 			{todayUploads}
 			loading={loadingHw}
 		/>
+	</div>
+
+	<!-- FireDrone: per drone and flight modes -->
+	<div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+		<DronesTable data={droneData} loading={loadingDrones} selected={filters.vehicleName} onDroneClick={handleDroneClick} />
+		<FlightModeBars data={modeData} loading={loadingModes} drone={filters.vehicleName} />
 	</div>
 
 	<!-- Charts grid: single column on mobile, 2 columns on lg+ -->

@@ -142,6 +142,12 @@ async fn run_server(config: ServeConfig) {
         http_client: reqwest::Client::new(),
     });
 
+    // FireDrone: flight modes of logs uploaded before log_flight_modes existed
+    tokio::spawn(flight_review_server::flight_modes::backfill(
+        state.db.clone(),
+        state.storage.clone(),
+    ));
+
     if let Some(ref dir) = config.static_dir {
         tracing::info!("frontend: {}", dir.display());
     }

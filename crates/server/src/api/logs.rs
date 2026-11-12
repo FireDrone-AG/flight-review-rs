@@ -357,6 +357,9 @@ async fn lazy_convert(state: &crate::AppState, id: Uuid) -> Result<bool, ApiErro
             })
             .collect();
         state.db.insert_field_stats(id, &field_stats).await?;
+        // FireDrone: time per flight mode, for the stats page
+        let modes = crate::flight_modes::from_analysis(&analysis.flight_modes);
+        state.db.insert_flight_modes(id, &modes).await?;
     }
 
     tracing::info!(

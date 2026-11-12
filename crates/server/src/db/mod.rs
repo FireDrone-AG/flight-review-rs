@@ -302,6 +302,8 @@ pub struct StatsParams {
     pub ver_sw_release_str: Option<String>,
     pub source: Option<String>,
     pub vibration_status: Option<String>,
+    /// FireDrone: one drone's logs (exact match).
+    pub vehicle_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -362,6 +364,29 @@ pub trait LogStore: Send + Sync {
         diagnostics: &[DiagnosticRecord],
     ) -> Result<(), DbError>;
     async fn delete_junction_data(&self, log_id: Uuid) -> Result<(), DbError>;
+
+    // FireDrone: time per flight mode (see crate::flight_modes).
+
+    /// Replace the log's rows in `log_flight_modes`: (mode, seconds).
+    async fn insert_flight_modes(
+        &self,
+        log_id: Uuid,
+        modes: &[(String, f64)],
+    ) -> Result<(), DbError>;
+    /// Time per flight mode over the logs that match `params` (its
+    /// `group_by` and `limit` are ignored), most time first.
+    async fn flight_mode_stats(&self, params: &StatsParams)
+        -> Result<Vec<FlightModeStat>, DbError>;
+    /// Logs without rows in `log_flight_modes` (uploaded before it existed).
+    async fn logs_without_flight_modes(&self) -> Result<Vec<Uuid>, DbError>;
+}
+
+/// FireDrone: total time in one flight mode, and in how many logs it occurs.
+#[derive(Debug, Clone, Serialize)]
+pub struct FlightModeStat {
+    pub mode: String,
+    pub total_s: f64,
+    pub logs: i64,
 }
 
 #[derive(Debug, thiserror::Error)]

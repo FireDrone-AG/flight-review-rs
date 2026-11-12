@@ -1,4 +1,4 @@
-import type { LogRecord, ListFilters, ListResponse, UploadOptions, UploadResponse, FlightMetadata, StatsResponse, VersionInfo } from './types';
+import type { LogRecord, ListFilters, ListResponse, UploadOptions, UploadResponse, FlightMetadata, StatsResponse, FlightModeStatsResponse, VersionInfo } from './types';
 
 const BASE = '/api';
 
@@ -124,6 +124,7 @@ export async function getStats(params: {
   vehicle_type?: string;
   ver_hw?: string;
   source?: string;
+  vehicle_name?: string;
 }): Promise<StatsResponse> {
   const p = new URLSearchParams();
   p.set('group_by', params.group_by);
@@ -132,5 +133,21 @@ export async function getStats(params: {
   if (params.vehicle_type) p.set('vehicle_type', params.vehicle_type);
   if (params.ver_hw) p.set('ver_hw', params.ver_hw);
   if (params.source) p.set('source', params.source);
+  if (params.vehicle_name) p.set('vehicle_name', params.vehicle_name);
   return apiFetch(`/stats?${p}`);
+}
+
+/** FireDrone: time per flight mode over the logs matching the filters. */
+export async function getFlightModeStats(params: {
+  period?: string;
+  vehicle_type?: string;
+  ver_hw?: string;
+  source?: string;
+  vehicle_name?: string;
+}): Promise<FlightModeStatsResponse> {
+  const p = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value) p.set(key, value);
+  }
+  return apiFetch(`/stats/flight-modes?${p}`);
 }

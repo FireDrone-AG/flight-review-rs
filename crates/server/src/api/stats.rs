@@ -16,6 +16,7 @@ const ALLOWED_GROUP_BY: &[&str] = &[
     "vibration_status",
     "sys_name",
     "mission_type",
+    "vehicle_name", // FireDrone: per drone
 ];
 
 #[derive(Debug, Serialize)]

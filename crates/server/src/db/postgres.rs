@@ -145,6 +145,50 @@ const ALTER_COLUMNS: &[&str] = &[
     "ALTER TABLE logs ADD COLUMN IF NOT EXISTS diagnostic_flags TEXT",
 ];
 
+/// FireDrone: time per flight mode per log, for the stats page.
+#[cfg(feature = "postgres")]
+const CREATE_FLIGHT_MODES: &str = r#"
+CREATE TABLE IF NOT EXISTS log_flight_modes (
+    log_id UUID NOT NULL,
+    mode TEXT NOT NULL,
+    duration_s DOUBLE PRECISION NOT NULL,
+    PRIMARY KEY (log_id, mode),
+    FOREIGN KEY (log_id) REFERENCES logs(id) ON DELETE CASCADE
+);
+"#;
+
+/// WHERE conditions (with $1.. placeholders) and their values, shared by the
+/// stats queries. Returns the last placeholder number used.
+#[cfg(feature = "postgres")]
+fn stats_conditions(params: &StatsParams) -> (Vec<String>, Vec<String>, usize) {
+    let mut conditions = vec!["is_public = true".to_string()];
+    let mut bind_values = Vec::new();
+    let mut param_idx: usize = 0;
+    if let Some(days) = super::period_to_days(params.period.as_deref()) {
+        param_idx += 1;
+        conditions.push(format!(
+            "created_at >= NOW() - (${} || ' days')::INTERVAL",
+            param_idx
+        ));
+        bind_values.push(days.to_string());
+    }
+    for (col, value) in [
+        ("vehicle_type", &params.vehicle_type),
+        ("ver_hw", &params.ver_hw),
+        ("ver_sw_release_str", &params.ver_sw_release_str),
+        ("source", &params.source),
+        ("vibration_status", &params.vibration_status),
+        ("vehicle_name", &params.vehicle_name),
+    ] {
+        if let Some(v) = value {
+            param_idx += 1;
+            conditions.push(format!("{col} = ${param_idx}"));
+            bind_values.push(v.clone());
+        }
+    }
+    (conditions, bind_values, param_idx)
+}
+
 #[cfg(feature = "postgres")]
 pub struct PostgresStore {
     pool: PgPool,
@@ -164,6 +208,7 @@ impl PostgresStore {
 
         // Create junction tables for parameters, topics, tags, errors.
         sqlx::raw_sql(CREATE_JUNCTION_TABLES).execute(&pool).await?;
+        sqlx::raw_sql(CREATE_FLIGHT_MODES).execute(&pool).await?;
 
         // Migrate: add new columns to existing tables (idempotent).
         for col_sql in ALTER_COLUMNS {
@@ -725,48 +770,7 @@ impl LogStore for PostgresStore {
 
     async fn stats(&self, params: &StatsParams) -> Result<Vec<StatRow>, DbError> {
         let group_col = &params.group_by; // Already validated by handler
-
-        // Build WHERE clause with positional parameters
-        let mut conditions = vec!["is_public = true".to_string()];
-        let mut bind_values: Vec<String> = Vec::new();
-        let mut param_idx: usize = 0;
-
-        // Period filter
-        if let Some(days) = super::period_to_days(params.period.as_deref()) {
-            param_idx += 1;
-            conditions.push(format!(
-                "created_at >= NOW() - (${} || ' days')::INTERVAL",
-                param_idx
-            ));
-            bind_values.push(days.to_string());
-        }
-
-        // Optional filters
-        if let Some(ref v) = params.vehicle_type {
-            param_idx += 1;
-            conditions.push(format!("vehicle_type = ${}", param_idx));
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.ver_hw {
-            param_idx += 1;
-            conditions.push(format!("ver_hw = ${}", param_idx));
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.ver_sw_release_str {
-            param_idx += 1;
-            conditions.push(format!("ver_sw_release_str = ${}", param_idx));
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.source {
-            param_idx += 1;
-            conditions.push(format!("source = ${}", param_idx));
-            bind_values.push(v.clone());
-        }
-        if let Some(ref v) = params.vibration_status {
-            param_idx += 1;
-            conditions.push(format!("vibration_status = ${}", param_idx));
-            bind_values.push(v.clone());
-        }
+        let (conditions, bind_values, mut param_idx) = stats_conditions(params);
 
         let where_clause = format!("WHERE {}", conditions.join(" AND "));
         let limit = params.limit.unwrap_or(50);
@@ -955,6 +959,69 @@ impl LogStore for PostgresStore {
             .await?;
         Ok(())
     }
+
+    async fn insert_flight_modes(
+        &self,
+        log_id: Uuid,
+        modes: &[(String, f64)],
+    ) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM log_flight_modes WHERE log_id = $1")
+            .bind(log_id)
+            .execute(&mut *tx)
+            .await?;
+        for (mode, duration_s) in modes {
+            sqlx::query(
+                "INSERT INTO log_flight_modes (log_id, mode, duration_s) VALUES ($1, $2, $3)",
+            )
+            .bind(log_id)
+            .bind(mode)
+            .bind(duration_s)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    async fn flight_mode_stats(
+        &self,
+        params: &StatsParams,
+    ) -> Result<Vec<super::FlightModeStat>, DbError> {
+        let (conditions, bind_values, _) = stats_conditions(params);
+        let sql = format!(
+            "SELECT m.mode AS mode, SUM(m.duration_s) AS total_s, COUNT(*) AS logs \
+             FROM log_flight_modes m JOIN logs ON logs.id = m.log_id \
+             WHERE {} GROUP BY m.mode ORDER BY total_s DESC",
+            conditions.join(" AND ")
+        );
+        let mut query = sqlx::query(&sql);
+        for v in &bind_values {
+            query = query.bind(v);
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        Ok(rows
+            .iter()
+            .map(|row| super::FlightModeStat {
+                mode: row.try_get("mode").unwrap_or_default(),
+                total_s: row.try_get("total_s").unwrap_or(0.0),
+                logs: row.try_get("logs").unwrap_or(0),
+            })
+            .collect())
+    }
+
+    async fn logs_without_flight_modes(&self) -> Result<Vec<Uuid>, DbError> {
+        let rows = sqlx::query(
+            "SELECT id FROM logs WHERE NOT EXISTS \
+             (SELECT 1 FROM log_flight_modes m WHERE m.log_id = logs.id)",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .iter()
+            .filter_map(|row| row.try_get("id").ok())
+            .collect())
+    }
 }
 
 #[cfg(not(feature = "postgres"))]
@@ -1049,6 +1116,31 @@ impl LogStore for PostgresStore {
     }
 
     async fn delete_junction_data(&self, _log_id: Uuid) -> Result<(), DbError> {
+        Err(DbError::Sqlx(sqlx::Error::Configuration(
+            "postgres feature is not enabled".into(),
+        )))
+    }
+
+    async fn insert_flight_modes(
+        &self,
+        _log_id: Uuid,
+        _modes: &[(String, f64)],
+    ) -> Result<(), DbError> {
+        Err(DbError::Sqlx(sqlx::Error::Configuration(
+            "postgres feature is not enabled".into(),
+        )))
+    }
+
+    async fn flight_mode_stats(
+        &self,
+        _params: &StatsParams,
+    ) -> Result<Vec<super::FlightModeStat>, DbError> {
+        Err(DbError::Sqlx(sqlx::Error::Configuration(
+            "postgres feature is not enabled".into(),
+        )))
+    }
+
+    async fn logs_without_flight_modes(&self) -> Result<Vec<Uuid>, DbError> {
         Err(DbError::Sqlx(sqlx::Error::Configuration(
             "postgres feature is not enabled".into(),
         )))

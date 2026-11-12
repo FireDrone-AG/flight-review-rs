@@ -13,6 +13,9 @@ upstream merges stay easy:
 | SQLite in WAL mode, one transaction per log's rows (`db/sqlite.rs`) | Readers (the log list, FireDrone Fleet) no longer wait for uploads, which made the list time out while drones uploaded. |
 | `--vehicle-name-header` / `FLIGHT_REVIEW_VEHICLE_NAME_HEADER` (`main.rs`, `lib.rs`, `api/upload.rs`) | Takes an upload's vehicle name from a header the reverse proxy sets after checking the drone's key (`X-Drone-Id`), so a drone can't file logs under another drone's name. Off unless set. |
 | `vehicle_name` filter on `GET /api/logs` (`db/*.rs`) | Exact match, so FireDrone Fleet can list one drone's logs. |
+| Per drone: "Drone" column in Browse (`LogTable.svelte`); on Stats a drone filter (`vehicle_name` on `/api/stats`), `group_by=vehicle_name`, the Drones table and Flight modes card (`DronesTable.svelte`, `FlightModeBars.svelte`) | Which drone flew what. Drones' logs carry the drone ID as vehicle name. |
+| `log_flight_modes` table and `GET /api/stats/flight-modes` (`flight_modes.rs`, `db/*.rs`, written in `api/upload.rs` and `api/logs.rs`) | Time per flight mode over many logs. Filled at upload; logs from before are filled from their `metadata.json` at startup. Whole logs, as in the viewer's flight mode bar. |
+| Stats "All" sends `period=all` (`routes/stats/+page.svelte`) | Without a period the server uses the last 30 days, so "All" showed only those. |
 | `.github/workflows/firedrone-image.yml` | On a tag `firedrone-vX.Y.Z`: build, smoke-test, push `ghcr.io/firedrone-ag/flight-review:X.Y.Z`. |
 
 Deployment, settings, S3 key rotation and database backups are described in

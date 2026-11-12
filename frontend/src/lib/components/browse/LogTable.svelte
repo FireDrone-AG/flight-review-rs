@@ -20,6 +20,7 @@
 	}
 
 	const columns: Column[] = [
+		{ key: 'vehicle_name', label: 'Drone', sortable: false }, // FireDrone
 		{ key: 'created_at', label: 'Date', sortable: true },
 		{ key: 'vehicle_type', label: 'Type', sortable: true },
 		{ key: 'ver_hw', label: 'Hardware', sortable: true },
@@ -97,7 +98,13 @@
 								<td
 									class="whitespace-nowrap px-2 sm:px-3 py-3 sm:py-4 text-sm text-gray-500 {col.hiddenMobile ? 'hidden sm:table-cell' : ''}"
 								>
-									{#if col.key === 'vehicle_type'}
+									{#if col.key === 'vehicle_name'}
+										{#if log.vehicle_name}
+											<span class="font-medium text-gray-900">{log.vehicle_name}</span>
+										{:else}
+											<span class="text-gray-300">{'\u2014'}</span>
+										{/if}
+									{:else if col.key === 'vehicle_type'}
 										<div class="flex items-center gap-2">
 											<img src={vehicleIconPath(log.vehicle_type)} alt={log.vehicle_type ?? ''} class="size-6 opacity-60" />
 											<span class="hidden sm:inline font-medium text-gray-900">{log.vehicle_type || log.sys_name || '\u2014'}</span>
