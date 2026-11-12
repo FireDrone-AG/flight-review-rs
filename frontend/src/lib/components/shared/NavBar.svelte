@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { darkMode } from '$lib/stores/theme';
 	import VersionBadge from './VersionBadge.svelte';
+	import ToolLinks from './ToolLinks.svelte';
+	import { toolLinks } from '$lib/stores/toolLinks';
 
 	let { currentPath } = $props<{ currentPath: string }>();
 
@@ -93,6 +95,9 @@
 						{/each}
 					</ul>
 				</li>
+				{#if $toolLinks.length > 0}
+					<li><ToolLinks class="-mx-2 space-y-1" /></li>
+				{/if}
 				<li class="mt-auto space-y-3">
 					<!-- Dark mode toggle -->
 					<button
@@ -209,6 +214,7 @@
 						</li>
 					{/each}
 				</ul>
+				<ToolLinks class="-mx-2 mt-6 space-y-1" />
 			</nav>
 			<div class="mt-8">
 				<VersionBadge />

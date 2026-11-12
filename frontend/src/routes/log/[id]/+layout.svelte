@@ -9,6 +9,7 @@
 	import { builderOpen } from '$lib/stores/logViewer';
 	import LoadingSpinner from '$lib/components/shared/LoadingSpinner.svelte';
 	import ErrorBanner from '$lib/components/shared/ErrorBanner.svelte';
+	import ToolLinks from '$lib/components/shared/ToolLinks.svelte';
 	import FlightSummaryHeader from '$lib/components/viewer/FlightSummaryHeader.svelte';
 	import FlightModeTimeline from '$lib/components/viewer/FlightModeTimeline.svelte';
 	import PlotBuilderPanel from '$lib/components/viewer/PlotBuilderPanel.svelte';
@@ -127,6 +128,7 @@
 				</svg>
 				Back to logs
 			</a>
+			<ToolLinks variant="bar" />
 			<div class="flex-1"></div>
 			<img src="/flight-review-logo.svg" alt="Flight Review" class="h-7 w-auto opacity-60" />
 		</div>

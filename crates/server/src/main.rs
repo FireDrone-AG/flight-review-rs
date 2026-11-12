@@ -2,10 +2,9 @@ use clap::{Args, Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tower_http::services::{ServeDir, ServeFile};
 use tracing_subscriber::EnvFilter;
 
-use flight_review_server::{db, storage::FileStorage, AppState};
+use flight_review_server::{db, storage::FileStorage, webapp, AppState};
 
 #[derive(Parser)]
 #[command(version, about = "Flight Review v2 server")]
@@ -62,6 +61,16 @@ struct ServeConfig {
     /// incoming requests.
     #[arg(long, env = "FLIGHT_REVIEW_VEHICLE_NAME_HEADER")]
     vehicle_name_header: Option<String>,
+
+    /// Link to another tool in the web app's navigation, as NAME=URL (e.g.
+    /// `Fleet=https://fleet.example.com`). Repeat the flag for more links;
+    /// FLIGHT_REVIEW_NAV_LINKS takes them comma-separated.
+    #[arg(
+        long = "nav-link",
+        env = "FLIGHT_REVIEW_NAV_LINKS",
+        value_delimiter = ','
+    )]
+    nav_links: Vec<webapp::NavLink>,
 }
 
 #[derive(Args)]
@@ -133,12 +142,16 @@ async fn run_server(config: ServeConfig) {
         http_client: reqwest::Client::new(),
     });
 
-    let mut app = flight_review_server::build_router(state);
-    if let Some(dir) = config.static_dir {
+    if let Some(ref dir) = config.static_dir {
         tracing::info!("frontend: {}", dir.display());
-        let index = ServeFile::new(dir.join("index.html"));
-        app = app.fallback_service(ServeDir::new(dir).fallback(index));
     }
+    for link in &config.nav_links {
+        tracing::info!("nav link: {} -> {}", link.name, link.url);
+    }
+    let app = flight_review_server::build_router(state).merge(webapp::router(
+        config.static_dir.as_deref(),
+        config.nav_links,
+    ));
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr)

@@ -1,4 +1,6 @@
 @import 'tailwindcss';
+/* FireDrone: dark mode for all pages (see dark.css) */
+@import './dark.css';
 
 @utility scrollbar-none {
   -ms-overflow-style: none;

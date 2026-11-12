@@ -1,11 +1,13 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
 	import uPlot from 'uplot';
 	import type { PlotConfig, FlightMetadata } from '$lib/types';
 	import { activePlots, togglePlotMinimized } from '$lib/stores/logViewer';
 	import { timeRange, setTimeRange, cursorTimestamp, SYNC_KEY } from '$lib/stores/plotSync';
 	import { initDuckDB, LogSession } from '$lib/utils/duckdb';
 	import { touchZoomPlugin } from '$lib/utils/uplotTouchZoom';
+	import { darkMode } from '$lib/stores/theme';
+	import { gridColor } from '$lib/utils/themeColors';
 
 	let { config, logId, metadata, index, totalCount, onMoveUp, onMoveDown, onDragStart, onDragEnd } = $props<{
 		config: PlotConfig;
@@ -26,6 +28,12 @@
 	let chartEl: HTMLDivElement | undefined = $state();
 	let uplot: uPlot | null = null;
 	let resizeObserver: ResizeObserver | null = null;
+
+	// FireDrone: redraw in the new theme's colors when it changes.
+	$effect(() => {
+		void $darkMode;
+		untrack(() => uplot?.redraw(false));
+	});
 
 	// The chart's available width, from the element uPlot renders into. clientWidth
 	// is post-layout and excludes scrollbars, so the plot never exceeds its column.
@@ -122,11 +130,11 @@
 				axes: [
 					{
 						stroke: '#9ca3af',
-						grid: { stroke: '#e5e7eb' },
+						grid: { stroke: gridColor },
 					},
 					{
 						stroke: '#9ca3af',
-						grid: { stroke: '#e5e7eb' },
+						grid: { stroke: gridColor },
 						label: config.yLabel || undefined,
 					},
 				],

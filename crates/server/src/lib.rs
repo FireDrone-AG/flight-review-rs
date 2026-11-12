@@ -3,6 +3,7 @@ pub mod db;
 pub mod extract;
 pub mod geocode;
 pub mod storage;
+pub mod webapp;
 
 use axum::{
     extract::DefaultBodyLimit,

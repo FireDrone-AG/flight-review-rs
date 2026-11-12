@@ -1,5 +1,7 @@
 <script lang="ts">
-	import { onMount, onDestroy } from 'svelte';
+	import { onMount, onDestroy, untrack } from 'svelte';
+	import { darkMode } from '$lib/stores/theme';
+	import { borderColor } from '$lib/utils/themeColors';
 	import type { PlotConfig, FlightMetadata } from '$lib/types';
 	import { activePlots, togglePlotMinimized } from '$lib/stores/logViewer';
 	import { initDuckDB, LogSession } from '$lib/utils/duckdb';
@@ -23,6 +25,12 @@
 	let containerEl: HTMLDivElement | undefined = $state();
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let resizeObserver: ResizeObserver | null = null;
+
+	// FireDrone: redraw in the new theme's colors when it changes.
+	$effect(() => {
+		void $darkMode;
+		untrack(() => render());
+	});
 
 	let loading = $state(true);
 	let error = $state<string | null>(null);
@@ -222,7 +230,7 @@
 		}
 
 		// --- Border ---
-		ctx.strokeStyle = '#d1d5db';
+		ctx.strokeStyle = borderColor();
 		ctx.lineWidth = 1;
 		ctx.strokeRect(padL, padT, plotW, plotH);
 
