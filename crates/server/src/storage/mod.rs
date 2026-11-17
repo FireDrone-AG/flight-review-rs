@@ -19,6 +19,12 @@ pub struct FileStorage {
     store: Arc<dyn ObjectStore>,
 }
 
+/// A stored file, read as it's sent ([`FileStorage::open_file`]).
+pub struct FileStream {
+    pub size: u64,
+    pub stream: futures::stream::BoxStream<'static, object_store::Result<Bytes>>,
+}
+
 impl FileStorage {
     /// Create storage from a URL:
     /// - `file:///path/to/dir` -> LocalFileSystem
@@ -122,6 +128,33 @@ impl FileStorage {
             }
         }
         Ok(files)
+    }
+
+    /// A log's file as a stream, for downloads that shouldn't be held in
+    /// memory. `None` if there is no such file.
+    pub async fn open_file(
+        &self,
+        log_id: Uuid,
+        filename: &str,
+    ) -> Result<Option<FileStream>, StorageError> {
+        self.open(&Self::log_file_path(log_id, filename)).await
+    }
+
+    /// Same as [`Self::open_file`], at a path relative to the storage root
+    /// (v1 ULG files).
+    pub async fn open_raw(&self, path: &str) -> Result<Option<FileStream>, StorageError> {
+        self.open(&ObjectPath::from(path.to_string())).await
+    }
+
+    async fn open(&self, path: &ObjectPath) -> Result<Option<FileStream>, StorageError> {
+        match self.store.get(path).await {
+            Ok(result) => Ok(Some(FileStream {
+                size: result.meta.size,
+                stream: result.into_stream(),
+            })),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     /// Get a file at an arbitrary path (relative to storage root).

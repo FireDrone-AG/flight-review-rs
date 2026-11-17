@@ -42,6 +42,65 @@ pub async fn get_log(
     }
 }
 
+/// GET /api/logs/:id/download -- the log's .ulg file, as a download
+/// (the viewer's ".ulg" button). Streamed, so a large log isn't held in memory.
+pub async fn download_log(
+    State(state): State<Arc<crate::AppState>>,
+    Path(id): Path<Uuid>,
+) -> Result<axum::response::Response, ApiError> {
+    let record = state.db.get(id).await?.ok_or(ApiError::NotFound)?;
+    // Uploads keep the .ulg under the uploaded file's name, lazy conversion
+    // under `<id>.ulg`; v1 logs not converted yet are only under the v1 prefix.
+    let mut file = state.storage.open_file(id, &record.filename).await?;
+    if file.is_none() {
+        file = state.storage.open_file(id, &format!("{id}.ulg")).await?;
+    }
+    if let (None, Some(prefix)) = (&file, &state.v1_ulg_prefix) {
+        file = state
+            .storage
+            .open_raw(&format!("{prefix}/{id}.ulg"))
+            .await?;
+    }
+    let file = file.ok_or(ApiError::NotFound)?;
+
+    let disposition = format!(
+        "attachment; filename=\"{}\"",
+        download_name(&record.filename, id)
+    );
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/octet-stream".to_string()),
+            (header::CONTENT_LENGTH, file.size.to_string()),
+            (header::CONTENT_DISPOSITION, disposition),
+        ],
+        axum::body::Body::from_stream(file.stream),
+    )
+        .into_response())
+}
+
+/// The name a download is saved under: the uploaded file's name without
+/// directories, reduced to letters, digits, '.', '-' and '_' (safe in a
+/// header and on any disk), ending in .ulg.
+fn download_name(filename: &str, id: Uuid) -> String {
+    let base = filename.rsplit(['/', '\\']).next().unwrap_or_default();
+    let mut name: String = base
+        .chars()
+        .map(|c| match c {
+            'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' | '_' => c,
+            _ => '_',
+        })
+        .collect::<String>()
+        .trim_start_matches('.')
+        .to_string();
+    if name.is_empty() {
+        name = id.to_string();
+    }
+    if !name.to_ascii_lowercase().ends_with(".ulg") {
+        name.push_str(".ulg");
+    }
+    name
+}
+
 #[derive(Deserialize)]
 pub struct DeleteParams {
     pub token: String,
@@ -399,4 +458,27 @@ fn parse_byte_range(range_str: &str) -> Result<(u64, u64), ApiError> {
         + 1; // Convert inclusive end to exclusive
 
     Ok((start, end))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::download_name;
+    use uuid::Uuid;
+
+    #[test]
+    fn download_names() {
+        let id = Uuid::nil();
+        assert_eq!(
+            download_name("fd-0003_sess013_log101.ulg", id),
+            "fd-0003_sess013_log101.ulg"
+        );
+        // no directories, nothing that breaks the header
+        assert_eq!(download_name("C:\\logs\\a b\".ULG", id), "a_b_.ULG");
+        assert_eq!(download_name("../../.hidden", id), "hidden.ulg");
+        assert_eq!(
+            download_name("Flug über Zürich.ulg", id),
+            "Flug__ber_Z_rich.ulg"
+        );
+        assert_eq!(download_name("", id), format!("{id}.ulg"));
+    }
 }

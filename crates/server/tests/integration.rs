@@ -458,3 +458,49 @@ async fn test_stats_per_drone_and_flight_modes() {
     flight_review_server::flight_modes::backfill(state.db.clone(), state.storage.clone()).await;
     assert_eq!(modes("fd-0002").await["data"], Value::Array(single));
 }
+
+/// The viewer's ".ulg" button: the uploaded file, as a download under its name.
+#[tokio::test]
+async fn test_download_ulg() {
+    let (base_url, _handle) = start_server().await;
+    let client = reqwest::Client::new();
+    let bytes = std::fs::read(fixture_path("sample.ulg")).unwrap();
+    let form = reqwest::multipart::Form::new().part(
+        "file",
+        reqwest::multipart::Part::bytes(bytes.clone()).file_name("fd-0003_sess013_log101.ulg"),
+    );
+    let resp = client
+        .post(format!("{}/api/upload", base_url))
+        .multipart(form)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = resp.json::<Value>().await.unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = client
+        .get(format!("{}/api/logs/{}/download", base_url, id))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        resp.headers()["content-disposition"],
+        "attachment; filename=\"fd-0003_sess013_log101.ulg\""
+    );
+    assert_eq!(resp.headers()["content-type"], "application/octet-stream");
+    assert_eq!(resp.bytes().await.unwrap(), bytes);
+
+    let resp = client
+        .get(format!(
+            "{}/api/logs/00000000-0000-0000-0000-000000000000/download",
+            base_url
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 404);
+}
