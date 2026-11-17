@@ -1,0 +1,16 @@
+{
+  "id": "/",
+  "name": "Flight Review",
+  "short_name": "Flight Review",
+  "description": "PX4 flight logs: plots, maps and statistics",
+  "start_url": "/browse",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "icons": [
+    { "src": "/app-icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/app-icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/app-icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

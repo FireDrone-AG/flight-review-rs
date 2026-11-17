@@ -18,6 +18,7 @@ upstream merges stay easy:
 | `log_flight_modes` table and `GET /api/stats/flight-modes` (`flight_modes.rs`, `db/*.rs`, written in `api/upload.rs` and `api/logs.rs`) | Time per flight mode over many logs. Filled at upload; logs from before are filled from their `metadata.json` at startup. Whole logs, as in the viewer's flight mode bar. |
 | `GET /api/logs/{id}/download` (`api/logs.rs`, `FileStorage::open_file` in `storage/mod.rs`) | The log viewer's ".ulg" button links there, but upstream has no such route, so the button got the web page instead of the log. Sends the uploaded .ulg as an attachment under its uploaded name, streamed from storage. Candidate for upstream. |
 | Stats "All" sends `period=all` (`routes/stats/+page.svelte`) | Without a period the server uses the last 30 days, so "All" showed only those. |
+| Installable as an app (`frontend/static/manifest.webmanifest`, `frontend/static/app-icons/`, tags in `app.html`) | Chrome, Edge and Android offer "Install", iPhone/iPad "Add to Home Screen"; opens on Browse in its own window. The manifest is fetched with the page's cookies (`crossorigin="use-credentials"`), so it works behind a sign-in without opening any path. Icons: the "FLIGHT REVIEW" badge of `flight-review-logo.svg`. |
 | `.github/workflows/firedrone-image.yml` | On a tag `firedrone-vX.Y.Z`: build, smoke-test, push `ghcr.io/firedrone-ag/flight-review:X.Y.Z`. |
 
 Deployment, settings, S3 key rotation and database backups are described in

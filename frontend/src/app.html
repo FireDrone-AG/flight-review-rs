@@ -3,6 +3,12 @@
   <head>
     <meta charset="utf-8" />
     <link rel="icon" href="%sveltekit.assets%/favicon.svg" />
+    <!-- FireDrone: installable as an app. use-credentials: the manifest is
+         fetched with the page's cookies, so it works behind a sign-in. -->
+    <link rel="manifest" href="%sveltekit.assets%/manifest.webmanifest" crossorigin="use-credentials" />
+    <link rel="apple-touch-icon" href="%sveltekit.assets%/app-icons/apple-touch-icon.png" />
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101828" media="(prefers-color-scheme: dark)" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     %sveltekit.head%
     <script>
