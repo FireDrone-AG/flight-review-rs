@@ -83,6 +83,8 @@
 								{col.label}{sortIndicator(col.key)}
 							</th>
 						{/each}
+						<!-- FireDrone: download the .ulg without opening the log -->
+						<th scope="col" class="py-3.5 pl-2 pr-3"><span class="sr-only">Download</span></th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-gray-100">
@@ -142,6 +144,23 @@
 									{/if}
 								</td>
 							{/each}
+							<td class="whitespace-nowrap py-2 pl-2 pr-3 text-right">
+								<!-- `download`: SvelteKit neither preloads nor routes it; the
+								     server names the file. stopPropagation: not the row's click. -->
+								<a
+									href="/api/logs/{log.id}/download"
+									download
+									onclick={(e) => e.stopPropagation()}
+									title="Download {log.filename}"
+									aria-label="Download {log.filename}"
+									class="inline-flex items-center gap-1 rounded-md bg-white px-2 py-1 text-xs font-medium text-gray-700 ring-1 ring-gray-300 hover:bg-gray-50"
+								>
+									<svg class="size-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true">
+										<path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12M12 16.5V3" />
+									</svg>
+									<span class="hidden sm:inline">.ulg</span>
+								</a>
+							</td>
 						</tr>
 					{/each}
 				</tbody>
