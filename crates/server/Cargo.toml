@@ -21,9 +21,14 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = ["runtime-tokio", "migrate", "chrono", "uuid"] }
 object_store = "0.12"
-# FireDrone: local position tracks (local_track.rs); same versions as the converter
+# FireDrone: local position tracks (local_track.rs) and the MCP endpoint
+# (mcp.rs); same versions as the converter
 arrow = "54"
-parquet = { version = "54", features = ["arrow"] }
+parquet = { version = "54", features = ["arrow", "async"] }
+# FireDrone: MCP endpoint (mcp.rs). Server side only: the client transports
+# would pull a second reqwest.
+rmcp = { version = "3.10", default-features = false, features = ["server", "macros", "transport-streamable-http-server"] }
+schemars = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

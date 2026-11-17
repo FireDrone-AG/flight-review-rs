@@ -14,6 +14,8 @@ struct Cli {
 }
 
 #[derive(Subcommand)]
+// Parsed once at startup; boxing the big variant buys nothing.
+#[allow(clippy::large_enum_variant)]
 enum Command {
     /// Start the HTTP server
     Serve(ServeConfig),
@@ -77,6 +79,33 @@ struct ServeConfig {
     /// "Dev Drone 1" instead of fd-0003. Fetched at most once a minute.
     #[arg(long, env = "FLIGHT_REVIEW_VEHICLE_NAMES_URL")]
     vehicle_names_url: Option<String>,
+
+    /// Serve a read-only MCP endpoint at /mcp, so AI assistants can read
+    /// public logs (see `mcp.rs`). It has no sign-in of its own: only behind
+    /// a proxy that authenticates every request and sets --mcp-user-header.
+    #[arg(long, env = "FLIGHT_REVIEW_MCP")]
+    mcp: bool,
+
+    /// The web app's public URL (e.g. `https://logs.example.com`), for links
+    /// to the log viewer in MCP answers.
+    #[arg(long, env = "FLIGHT_REVIEW_PUBLIC_URL")]
+    public_url: Option<String>,
+
+    /// `Host` values the MCP endpoint accepts, comma-separated (e.g.
+    /// `logs.example.com`). Required with --mcp.
+    #[arg(long, env = "FLIGHT_REVIEW_MCP_ALLOWED_HOSTS", value_delimiter = ',')]
+    mcp_allowed_hosts: Vec<String>,
+
+    /// Browser origins the MCP endpoint accepts, comma-separated (e.g.
+    /// `https://claude.ai`). Requests without an Origin always pass.
+    #[arg(long, env = "FLIGHT_REVIEW_MCP_ALLOWED_ORIGINS", value_delimiter = ',')]
+    mcp_allowed_origins: Vec<String>,
+
+    /// Header the authenticating proxy sets to the signed-in person (e.g.
+    /// `X-Fleet-User`); MCP requests without it are refused. Only safe if
+    /// the proxy also strips it from incoming requests.
+    #[arg(long, env = "FLIGHT_REVIEW_MCP_USER_HEADER")]
+    mcp_user_header: Option<String>,
 }
 
 #[derive(Args)]
@@ -163,11 +192,38 @@ async fn run_server(config: ServeConfig) {
     if let Some(ref url) = config.vehicle_names_url {
         tracing::info!("vehicle names: {url}");
     }
-    let app = flight_review_server::build_router(state).merge(webapp::router(
-        config.static_dir.as_deref(),
-        config.nav_links,
-        config.vehicle_names_url,
-    ));
+    let names = Arc::new(webapp::VehicleNames::new(config.vehicle_names_url));
+    let mut app =
+        flight_review_server::build_router(state.clone()).merge(webapp::router_with_names(
+            config.static_dir.as_deref(),
+            config.nav_links,
+            names.clone(),
+        ));
+
+    // FireDrone: read-only MCP endpoint
+    if config.mcp {
+        if config.mcp_allowed_hosts.is_empty() {
+            eprintln!("Error: --mcp needs --mcp-allowed-hosts (the host name clients use)");
+            std::process::exit(2);
+        }
+        match &config.mcp_user_header {
+            Some(h) => tracing::info!("mcp: /mcp, signed-in person from {h}"),
+            None => tracing::warn!(
+                "mcp: /mcp without --mcp-user-header: anyone who can reach it reads public logs"
+            ),
+        }
+        tracing::info!("mcp: hosts {:?}", config.mcp_allowed_hosts);
+        app = app.merge(flight_review_server::mcp::router(
+            state,
+            names,
+            flight_review_server::mcp::McpConfig {
+                public_url: config.public_url,
+                allowed_hosts: config.mcp_allowed_hosts,
+                allowed_origins: config.mcp_allowed_origins,
+                user_header: config.mcp_user_header,
+            },
+        ));
+    }
 
     let addr = format!("{}:{}", config.host, config.port);
     let listener = TcpListener::bind(&addr)

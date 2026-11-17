@@ -201,7 +201,7 @@ pub struct LogRecord {
     pub diagnostic_flags: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct ListFilters {
     // Existing filters
     pub sys_name: Option<String>,

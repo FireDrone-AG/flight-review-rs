@@ -140,6 +140,23 @@ impl FileStorage {
         self.open(&Self::log_file_path(log_id, filename)).await
     }
 
+    /// Size in bytes of a log's file, `None` if there is no such file.
+    pub async fn file_size(
+        &self,
+        log_id: Uuid,
+        filename: &str,
+    ) -> Result<Option<u64>, StorageError> {
+        match self
+            .store
+            .head(&Self::log_file_path(log_id, filename))
+            .await
+        {
+            Ok(meta) => Ok(Some(meta.size)),
+            Err(object_store::Error::NotFound { .. }) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Same as [`Self::open_file`], at a path relative to the storage root
     /// (v1 ULG files).
     pub async fn open_raw(&self, path: &str) -> Result<Option<FileStream>, StorageError> {

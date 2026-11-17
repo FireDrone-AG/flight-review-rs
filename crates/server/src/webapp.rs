@@ -58,7 +58,20 @@ pub fn router(
     nav_links: Vec<NavLink>,
     vehicle_names_url: Option<String>,
 ) -> Router {
-    let names = Arc::new(VehicleNames::new(vehicle_names_url));
+    router_with_names(
+        static_dir,
+        nav_links,
+        Arc::new(VehicleNames::new(vehicle_names_url)),
+    )
+}
+
+/// Same as [`router`], with display names shared with other routes (the MCP
+/// endpoint).
+pub fn router_with_names(
+    static_dir: Option<&Path>,
+    nav_links: Vec<NavLink>,
+    names: Arc<VehicleNames>,
+) -> Router {
     let mut app = Router::new()
         .route(
             "/api/nav-links",
@@ -86,9 +99,9 @@ const NAMES_TTL: Duration = Duration::from_secs(60);
 /// a URL that answers with such a JSON object (FireDrone Fleet's
 /// /api/drone-names). Kept for [`NAMES_TTL`]; if the URL doesn't answer, the
 /// last names (or none) are used until the next try.
-type Names = Arc<HashMap<String, String>>;
+pub type Names = Arc<HashMap<String, String>>;
 
-struct VehicleNames {
+pub struct VehicleNames {
     url: Option<String>,
     client: reqwest::Client,
     /// When the names were fetched, and the names
@@ -96,7 +109,7 @@ struct VehicleNames {
 }
 
 impl VehicleNames {
-    fn new(url: Option<String>) -> Self {
+    pub fn new(url: Option<String>) -> Self {
         VehicleNames {
             url,
             client: reqwest::Client::builder()
@@ -107,7 +120,7 @@ impl VehicleNames {
         }
     }
 
-    async fn get(&self) -> Names {
+    pub async fn get(&self) -> Names {
         let Some(url) = &self.url else {
             return Arc::default();
         };
