@@ -3,6 +3,7 @@ pub mod db;
 pub mod extract;
 pub mod flight_modes;
 pub mod geocode;
+pub mod local_track;
 pub mod storage;
 pub mod webapp;
 

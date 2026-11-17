@@ -108,7 +108,18 @@ export interface TrackPointCompact {
   m: number; // mode_id
 }
 
-export async function getTrack(id: string): Promise<TrackPointCompact[]> {
+/** FireDrone: a point of a flight without GPS: the estimator's local
+ *  position, metres north (x) and east (y) of where it started. */
+export interface LocalTrackPoint {
+  x: number;
+  y: number;
+  m: number; // mode_id
+  b?: true; // starts a new line (estimator reset or invalid position)
+}
+
+export type TrackPoint = TrackPointCompact | LocalTrackPoint;
+
+export async function getTrack(id: string): Promise<TrackPoint[]> {
   return apiFetch(`/logs/${id}/track`);
 }
 

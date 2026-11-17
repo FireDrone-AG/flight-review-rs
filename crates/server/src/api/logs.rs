@@ -129,10 +129,12 @@ pub async fn delete_log(
 /// GET /api/logs/:id/track -- lightweight GPS track for thumbnails
 /// Returns a downsampled GPS track (max 100 points) for canvas rendering.
 /// Much smaller than fetching the full metadata.json (~2KB vs ~200KB).
+/// FireDrone: without GPS, the local position track instead (x/y points,
+/// see [`crate::local_track`]).
 pub async fn get_track(
     State(state): State<Arc<crate::AppState>>,
     Path(id): Path<Uuid>,
-) -> Result<Json<Vec<TrackPointCompact>>, ApiError> {
+) -> Result<Json<Track>, ApiError> {
     let data = state
         .storage
         .get_file(id, "metadata.json")
@@ -149,7 +151,8 @@ pub async fn get_track(
         .clone();
 
     if track.is_empty() {
-        return Ok(Json(vec![]));
+        let local = crate::local_track::load(&state.storage, id, &meta).await;
+        return Ok(Json(Track::Local(local)));
     }
 
     // Parse and downsample
@@ -166,7 +169,7 @@ pub async fn get_track(
 
     let max_points = 100;
     if full.len() <= max_points {
-        return Ok(Json(full));
+        return Ok(Json(Track::Gps(full)));
     }
 
     // Downsample: always keep first and last, evenly sample the rest
@@ -179,7 +182,16 @@ pub async fn get_track(
     }
     sampled.push(full[full.len() - 1].clone());
 
-    Ok(Json(sampled))
+    Ok(Json(Track::Gps(sampled)))
+}
+
+/// FireDrone: a GPS track, or a local one for flights without GPS. Both are a
+/// JSON array; the points tell them apart (lat/lon or x/y).
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum Track {
+    Gps(Vec<TrackPointCompact>),
+    Local(Vec<crate::local_track::LocalPoint>),
 }
 
 #[derive(Serialize, Clone)]

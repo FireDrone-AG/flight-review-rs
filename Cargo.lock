@@ -977,6 +977,7 @@ dependencies = [
 name = "flight-review-server"
 version = "0.1.0"
 dependencies = [
+ "arrow",
  "async-trait",
  "axum",
  "bytes",
@@ -985,6 +986,7 @@ dependencies = [
  "flight-review",
  "futures",
  "object_store",
+ "parquet",
  "reqwest",
  "serde",
  "serde_json",
