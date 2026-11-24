@@ -15,7 +15,7 @@ use arrow::record_batch::RecordBatch;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
-use px4_ulog::full_parser::SomeVec;
+use px4_ulog::full_parser::{ParsedData, SomeVec};
 
 use serde::{Deserialize, Serialize};
 
@@ -116,23 +116,16 @@ pub fn convert_ulog_with_analyzers(
 ) -> Result<ConvertResult, ConvertError> {
     // Parse the ULog file. A truncated or malformed tail no longer fails the
     // whole parse — read_file returns the valid prefix plus how it ended.
-    let parsed = px4_ulog::full_parser::read_file(input_path)?;
-    if parsed.messages.is_empty() {
+    let ParsedData {
+        messages,
+        completeness,
+    } = px4_ulog::full_parser::read_file(input_path)?;
+    if messages.is_empty() {
         return Err(ConvertError::NoData);
     }
 
-    // Extract metadata via the streaming parser
-    let mut metadata = crate::metadata::extract_metadata(input_path)?;
-
-    // Run flight analysis (second streaming pass)
-    let analysis = crate::analysis::analyze_with_analyzers(input_path, &metadata, analyzers)?;
-    metadata.analysis = Some(analysis);
-
-    // Record how the log ended (complete / truncated / malformed). The full parse
-    // above is authoritative; the streaming passes also recover their prefixes.
-    metadata.completeness = parsed.completeness.clone().into();
     let mut filenames = std::collections::HashSet::new();
-    for (topic, instances) in &parsed.messages {
+    for (topic, instances) in &messages {
         if topic.contains(['/', '\\']) || topic == "." || topic == ".." {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -153,18 +146,33 @@ pub fn convert_ulog_with_analyzers(
     }
     std::fs::create_dir_all(output_dir)?;
 
-    // Convert each topic to a Parquet file
+    // Convert each topic to a Parquet file. The fully parsed log is by far the
+    // biggest allocation in a conversion (more than the .ulg itself), so it's
+    // consumed as it goes: each topic's columns move into Arrow without a
+    // copy and are freed once its file is written.
     let mut parquet_files = Vec::new();
 
-    for (topic_name, multi_map) in &parsed.messages {
+    for (topic_name, multi_map) in messages {
         for (multi_id, fields) in multi_map {
-            let filename = topic_filename(topic_name, multi_id.value());
+            let filename = topic_filename(&topic_name, multi_id.value());
             let path = output_dir.join(&filename);
 
-            write_topic_parquet(topic_name, fields, &path)?;
+            write_topic_parquet(fields, &path)?;
             parquet_files.push(path);
         }
     }
+
+    // The metadata and analysis passes stream the file again, so they run
+    // only now, without the parsed log still in memory.
+    let mut metadata = crate::metadata::extract_metadata(input_path)?;
+
+    // Run flight analysis (second streaming pass)
+    let analysis = crate::analysis::analyze_with_analyzers(input_path, &metadata, analyzers)?;
+    metadata.analysis = Some(analysis);
+
+    // Record how the log ended (complete / truncated / malformed). The full parse
+    // above is authoritative; the streaming passes also recover their prefixes.
+    metadata.completeness = completeness.into();
 
     fn topic_filename(topic: &str, instance: u8) -> String {
         if instance == 0 {
@@ -192,10 +200,10 @@ pub fn convert_ulog_with_analyzers(
     Ok(result)
 }
 
-/// Write a single topic's data as a Parquet file.
+/// Write a single topic's data as a Parquet file, taking the columns over
+/// rather than copying them.
 fn write_topic_parquet(
-    _topic_name: &str,
-    fields: &HashMap<String, SomeVec>,
+    mut fields: HashMap<String, SomeVec>,
     output_path: &Path,
 ) -> Result<(), ConvertError> {
     if fields.is_empty() {
@@ -203,11 +211,11 @@ fn write_topic_parquet(
     }
 
     // Build Arrow schema and arrays from SomeVec data
-    let mut arrow_fields = Vec::new();
-    let mut arrow_arrays: Vec<ArrayRef> = Vec::new();
+    let mut arrow_fields = Vec::with_capacity(fields.len());
+    let mut arrow_arrays: Vec<ArrayRef> = Vec::with_capacity(fields.len());
 
     // Put timestamp first if it exists
-    let mut field_names: Vec<&String> = fields.keys().collect();
+    let mut field_names: Vec<String> = fields.keys().cloned().collect();
     field_names.sort();
     if let Some(pos) = field_names.iter().position(|n| n.as_str() == "timestamp") {
         let ts = field_names.remove(pos);
@@ -215,7 +223,9 @@ fn write_topic_parquet(
     }
 
     for name in &field_names {
-        let vec = &fields[*name];
+        let vec = fields
+            .remove(name)
+            .expect("field names come from the map's own keys");
         let (field, array) = somevec_to_arrow(name, vec);
         arrow_fields.push(field);
         arrow_arrays.push(array);
@@ -236,52 +246,53 @@ fn write_topic_parquet(
     Ok(())
 }
 
-/// Convert a SomeVec to an Arrow Field + ArrayRef.
-fn somevec_to_arrow(name: &str, vec: &SomeVec) -> (Field, ArrayRef) {
+/// Convert a SomeVec to an Arrow Field + ArrayRef. Numeric columns hand their
+/// `Vec` to Arrow as is (no copy).
+fn somevec_to_arrow(name: &str, vec: SomeVec) -> (Field, ArrayRef) {
     match vec {
         SomeVec::Int8(v) => (
             Field::new(name, DataType::Int8, false),
-            Arc::new(Int8Array::from(v.clone())) as ArrayRef,
+            Arc::new(Int8Array::from(v)) as ArrayRef,
         ),
         SomeVec::UInt8(v) => (
             Field::new(name, DataType::UInt8, false),
-            Arc::new(UInt8Array::from(v.clone())) as ArrayRef,
+            Arc::new(UInt8Array::from(v)) as ArrayRef,
         ),
         SomeVec::Int16(v) => (
             Field::new(name, DataType::Int16, false),
-            Arc::new(Int16Array::from(v.clone())) as ArrayRef,
+            Arc::new(Int16Array::from(v)) as ArrayRef,
         ),
         SomeVec::UInt16(v) => (
             Field::new(name, DataType::UInt16, false),
-            Arc::new(UInt16Array::from(v.clone())) as ArrayRef,
+            Arc::new(UInt16Array::from(v)) as ArrayRef,
         ),
         SomeVec::Int32(v) => (
             Field::new(name, DataType::Int32, false),
-            Arc::new(Int32Array::from(v.clone())) as ArrayRef,
+            Arc::new(Int32Array::from(v)) as ArrayRef,
         ),
         SomeVec::UInt32(v) => (
             Field::new(name, DataType::UInt32, false),
-            Arc::new(UInt32Array::from(v.clone())) as ArrayRef,
+            Arc::new(UInt32Array::from(v)) as ArrayRef,
         ),
         SomeVec::Int64(v) => (
             Field::new(name, DataType::Int64, false),
-            Arc::new(Int64Array::from(v.clone())) as ArrayRef,
+            Arc::new(Int64Array::from(v)) as ArrayRef,
         ),
         SomeVec::UInt64(v) => (
             Field::new(name, DataType::UInt64, false),
-            Arc::new(UInt64Array::from(v.clone())) as ArrayRef,
+            Arc::new(UInt64Array::from(v)) as ArrayRef,
         ),
         SomeVec::Float(v) => (
             Field::new(name, DataType::Float32, false),
-            Arc::new(Float32Array::from(v.clone())) as ArrayRef,
+            Arc::new(Float32Array::from(v)) as ArrayRef,
         ),
         SomeVec::Double(v) => (
             Field::new(name, DataType::Float64, false),
-            Arc::new(Float64Array::from(v.clone())) as ArrayRef,
+            Arc::new(Float64Array::from(v)) as ArrayRef,
         ),
         SomeVec::Bool(v) => (
             Field::new(name, DataType::Boolean, false),
-            Arc::new(BooleanArray::from(v.clone())) as ArrayRef,
+            Arc::new(BooleanArray::from(v)) as ArrayRef,
         ),
         SomeVec::Char(v) => {
             let strings: Vec<String> = v.iter().map(|c| c.to_string()).collect();

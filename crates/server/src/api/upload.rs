@@ -1,6 +1,12 @@
-use axum::{extract::Multipart, extract::State, http::HeaderMap, Json};
+use axum::{
+    extract::{multipart::Field, Multipart, State},
+    http::HeaderMap,
+    Json,
+};
 use bytes::Bytes;
+use std::path::Path;
 use std::sync::Arc;
+use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
 use crate::extract::extract_search_fields;
@@ -12,8 +18,12 @@ pub async fn upload(
     headers: HeaderMap,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    // 1. Extract the file and optional fields from multipart
-    let mut file_bytes: Option<(String, Bytes)> = None;
+    // 1. Extract the file and optional fields from multipart. The file goes
+    // straight to a temp file as it arrives: a long flight's log is hundreds of
+    // MB, and conversion needs the memory more.
+    let tmp_dir = tempfile::tempdir().map_err(|e| ApiError::Internal(format!("tempdir: {e}")))?;
+    let input_path = tmp_dir.path().join("input.ulg");
+    let mut uploaded: Option<(String, i64)> = None;
     let mut is_public = false;
     let mut description: Option<String> = None;
     let mut wind_speed: Option<String> = None;
@@ -33,11 +43,8 @@ pub async fn upload(
     {
         if field.name() == Some("file") {
             let filename = field.file_name().unwrap_or("upload.ulg").to_string();
-            let data = field
-                .bytes()
-                .await
-                .map_err(|e| ApiError::BadRequest(format!("failed to read file field: {e}")))?;
-            file_bytes = Some((filename, data));
+            let size = save_field(field, &input_path).await?;
+            uploaded = Some((filename, size));
         } else if field.name() == Some("is_public") {
             let val = field.text().await.unwrap_or_default();
             is_public = val == "true" || val == "1";
@@ -76,17 +83,11 @@ pub async fn upload(
         }
     }
 
-    let (original_filename, data) = file_bytes.ok_or_else(|| {
+    let (original_filename, file_size) = uploaded.ok_or_else(|| {
         ApiError::BadRequest("missing 'file' field in multipart form".to_string())
     })?;
 
-    let file_size = data.len() as i64;
-
-    // 2. Save to a temp file and run conversion
-    let tmp_dir = tempfile::tempdir().map_err(|e| ApiError::Internal(format!("tempdir: {e}")))?;
-    let input_path = tmp_dir.path().join("input.ulg");
-    tokio::fs::write(&input_path, &data).await?;
-
+    // 2. Run conversion on the saved file
     let output_dir = tmp_dir.path().join("output");
     let input_str = input_path.to_string_lossy().to_string();
     let output_dir_clone = output_dir.clone();
@@ -104,10 +105,12 @@ pub async fn upload(
     // and retrying won't help.
     .map_err(|e| ApiError::BadRequest(format!("conversion error: {e}")))?;
 
-    // 5. Store the raw .ulg file alongside converted data
+    // 5. Store the raw .ulg file alongside converted data. It's read back only
+    // now, after conversion has given its memory back.
+    let data = tokio::fs::read(&input_path).await?;
     state
         .storage
-        .put_file(log_id, &original_filename, data.clone())
+        .put_file(log_id, &original_filename, Bytes::from(data))
         .await?;
 
     // Store each Parquet file in object storage under log_id/
@@ -263,4 +266,21 @@ pub async fn upload(
             .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(String::from))
             .collect::<Vec<_>>(),
     })))
+}
+
+/// Write a multipart field to `path` as it arrives, so the upload is never
+/// held in memory whole. Returns the number of bytes written.
+async fn save_field(mut field: Field<'_>, path: &Path) -> Result<i64, ApiError> {
+    let mut file = tokio::fs::File::create(path).await?;
+    let mut size: i64 = 0;
+    while let Some(chunk) = field
+        .chunk()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("failed to read file field: {e}")))?
+    {
+        file.write_all(&chunk).await?;
+        size += chunk.len() as i64;
+    }
+    file.flush().await?;
+    Ok(size)
 }
