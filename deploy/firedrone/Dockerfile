@@ -43,6 +43,11 @@ RUN useradd --system --uid 10002 --home-dir /data flightreview \
 USER flightreview
 
 ENV FLIGHT_REVIEW_STATIC_DIR=/srv/frontend
+# Each upload converts on a different blocking thread, and glibc gives threads
+# their own malloc arenas, so freed memory piled up across uploads (374 MB held
+# idle after a few big logs) and the next big log hit the container's memory
+# limit. Two arenas keep the peak the same from one upload to the next.
+ENV MALLOC_ARENA_MAX=2
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s CMD curl -fsS http://127.0.0.1:8080/health || exit 1
 ENTRYPOINT ["flight-review-server"]
